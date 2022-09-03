@@ -1,11 +1,42 @@
 extends Node2D
-#takes the texture attached to Sprite and estimates how many rows and columns
-#of sprites are contained in the sheet
-#proof of conecept so not optimized at all, there are serious improvements
-#that can be made here
+#Takes the texture attached to Sprite and estimates how many rows and columns
+# of sprites are contained in the sheet
+# proof of concept so not optimized at all, there are serious improvements
+# that can be made here by moving out of gdscript.
+# The lag isn't noticeable for me on anything other than egregiously large 
+# sheets like spritesheet_players (1024x2048), but obviously any lag is no good.
 
-#included spritesheets are CC0 from Kenney ( https://kenney.nl/assets )
-# who is very kind for providing these
+#Spritesheets in the Kenney_Sprites folder are from Kenney, released under CC0
+# https://kenney.nl/assets 
+#Ars_Notoria sprites by Balmer, released under CC0 
+# https://opengameart.org/content/hero-spritesheets-ars-notoria 
+#Superpowers sprite by Pixel-Boy, released under CC0
+# https://github.com/sparklinlabs/superpowers-asset-packs 
+
+#this performs best on sprites surrounded by transparency on all four sides, 
+#which is relatively easy to detect.  In cases where the sprite extends all the
+#way to the edge, it gets dicier.
+
+#in particular, it struggles with sheets that have very little transparency,
+#like spritesheet_tiles
+#That said, it does surprisingly well with Ars_Notoria_02, which is a tiny piece 
+#of equipment that is supposed to be overlaid on the shirtless guy, and which
+#is swimming in an empty sea of transparency.
+
+#The sprites in Kenney/Unaligned_sheets are ones that don't follow a consistent
+#grid.  My current approach can't really do anything with them.
+#I am including them in case someone wants a challenge when extending this.
+
+#Tilesets (which usually have no transparency) aren't going to work as well.
+#I suspect you could get somewhere by assuming the tile is square and doing some
+#fourier transform stuff on it, but that's beyond the scope of what I can do in
+#gdscript.
+
+
+
+#and realistically you could probably do this entire thing more effectively by
+#finding local minima and maxima, but gdscript doesn't have much math support
+#so I'm going with what the language can provide.
 
 onready var spriteSheet= $Sprite
 
@@ -14,27 +45,27 @@ onready var sheetSize = spriteSheet.texture.get_size();
 onready var pxWidth: int =sheetSize.x
 onready var pxHeight: int =sheetSize.y
 
-var lowFrameCountPenalty=0.1; #deprioritizes lower framecounts compared to higher ones
+#one of the big problems is trying to sort out harmonics - a 9x9 sprite sheet
+# with nice transparent frames around each sprite can be hard to distinguish
+# from a 3x3 sprite sheet 
+# in principle there might be a more effective way to differentiate, but
+# instead I am just penalizing small frame counts compared to higher ones
+# so if two counts are both plausible, it'll pick the one with more frames.
+var lowFrameCountPenalty=0.3; 
+#Number was tuned experimentally
 
 # Called when the node enters the scene tree for the first time.
 func _ready():
-	var potentialWidths=[0]
-	var potentialHeights=[0]
-	potentialWidths.resize(128)
-	potentialHeights.resize(128)
-	potentialWidths.fill(0)
-	potentialHeights.fill(0)
-	
-	#
-	var columnsum = [0]
-	var rowsum = [0]
+
+	var columnsum = [0.0]
+	var rowsum = [0.0]
 	columnsum.resize(pxWidth);
 	rowsum.resize(pxHeight);
-	columnsum.fill(0)
-	rowsum.fill(0)
+	columnsum.fill(0.0)
+	rowsum.fill(0.0)
 	
 
-	
+	# I really don't like hard abitrary limits on magic numbers in general, but
 	# this is quick and dirty proof of concept code
 	# and if you have more than 128 frames in your sprite sheet you have a serious problem.
 	var maxXFrameNumber=min(128,floor(sqrt(pxWidth)));
@@ -48,72 +79,47 @@ func _ready():
 	potentialYFrames.fill(0)
 	
 	var sheetImage=spriteSheet.texture.get_data()
+	
 	#I'm sure there's a more clever and efficient low-level way to do this
-	#but screw it, pixel-by-pixel it is!
+	# using spriteSheet.texture.get_data().data.data 
+	# but that's at least three times too much "data" for me.
+	# So screw it, pixel-by-pixel it is!
 	sheetImage.lock()
-	for xindex in range (0,pxWidth-1):
-		for yindex in range(0,pxHeight-1):
+	for xindex in range (0,pxWidth):
+		for yindex in range(0,pxHeight):
 			var myPix=sheetImage.get_pixel(xindex,yindex)	
-			columnsum[xindex]= columnsum[xindex]+1-myPix.a # switch alpha values around so we are measuring transparency
-			rowsum[yindex]= rowsum[yindex]+1-myPix.a # switch alpha values around so we are measuring transparency
+			columnsum[xindex]= columnsum[xindex]+1-float(myPix.a) # switch alpha values around so we are measuring transparency
+			rowsum[yindex]= rowsum[yindex]+1-float(myPix.a) # switch alpha values around so we are measuring transparency
+			
 	sheetImage.unlock()
 	
 
 		
 		
-		#check for an alpha channel
-	if (columnsum.max()==columnsum.min()):
+		#check if the alpha channel actually matters.
+	if (columnsum.max()==columnsum.min() && rowsum.max() == rowsum.min()):
 		print('file has no alpha variation')
 	else:
+		for numFrames in range( 1,maxXFrameNumber+1):
+			if (pxWidth%numFrames==0):
+				for midFrameIndex in range(1,numFrames+1):
+					#give a score based on how many clear lines we have at the edge and how many 
+					#nonclear lines we have in the center
+					potentialXFrames[numFrames] +=weightTransparentCount(columnsum,pxHeight,numFrames,midFrameIndex)
 
-
-		
-		#handle the single frame case
-		potentialXFrames[1]=waitDoesGodotSERIOUSLYNotHaveANativeMeanOrSumFunctionForArraysWTF(columnsum)*(1-lowFrameCountPenalty);
-		for index in range( 2,maxXFrameNumber):
-			if (pxWidth%index==0):
-				for midFrameIndex in range(1,index):
-					#we assume that the left and right edges of the frame
-					#should have the least alpha
-					#left side, counting up
-					potentialXFrames[index] =potentialXFrames[index] + columnsum[ (midFrameIndex-1) * pxWidth/index];
-					#right side, counting down
-					potentialXFrames[index] = potentialXFrames[index] + columnsum[columnsum.size()-1 - (midFrameIndex-1) * pxWidth/index];
-					
-					
-					#we will assume that the middle of the frame should have
-					#the most alpha!  Subtract it
-					potentialXFrames[index] =potentialXFrames[index] - columnsum[ ceil(pxWidth/(index*2)) + (midFrameIndex-1) * pxWidth/index];
-				
-				#make this an average
-				potentialXFrames[index]=potentialXFrames[index]/index;
 				#prioritize more frames over fewer (slightly)
-				potentialXFrames[index]=potentialXFrames[index]*(index-lowFrameCountPenalty)/index;
+				potentialXFrames[numFrames]=potentialXFrames[numFrames]*(numFrames-lowFrameCountPenalty)/numFrames;
 			
 		
-
-		#handle the single frame case
-		potentialYFrames[1]=waitDoesGodotSERIOUSLYNotHaveANativeMeanOrSumFunctionForArraysWTF(rowsum)*(1-lowFrameCountPenalty);
-		for index in range( 2,maxYFrameNumber):
-			if ( pxHeight%index ==0):
-				for midFrameIndex in range(1,index):
-					#we assume that the top and bottom edges of the frame
-					#should have the least alpha
-					#top side, counting up
-					potentialYFrames[index] =potentialYFrames[index] + rowsum[ (midFrameIndex-1) * pxHeight/index];
-					#bottom side, counting down
-					potentialYFrames[index] = potentialYFrames[index] + rowsum[rowsum.size() -1 - (midFrameIndex-1) * pxHeight/index];
-
-					#we will assume that the middle of the frame should have
-					#the most alpha!  Subtract it
-					potentialYFrames[index] =potentialYFrames[index] - rowsum[ceil(pxHeight/(index*2)) + (midFrameIndex-1) * pxHeight/index];
-
-				
-
-				#make this an average
-				potentialYFrames[index]=potentialYFrames[index]/index;
+		for numFrames in range( 1,maxYFrameNumber+1):
+			if ( pxHeight%numFrames ==0):
+				for midFrameIndex in range(1,numFrames+1):
+					#give a score for how many clear lines we have at the edge and how many 
+					#nonclear lines we have in the center
+					potentialYFrames[numFrames] +=weightTransparentCount(rowsum,pxWidth,numFrames,midFrameIndex)
+					
 				#prioritize more frames over fewer (slightly)
-				potentialYFrames[index]=potentialYFrames[index]*(index-lowFrameCountPenalty)/index;
+				potentialYFrames[numFrames]=potentialYFrames[numFrames]*(numFrames-lowFrameCountPenalty)/numFrames;
 			
 		
 		
@@ -123,15 +129,52 @@ func _ready():
 		#potentialYFrames
 		var maxYValue=potentialYFrames.max();
 		var bestYFrame=potentialYFrames.find_last(maxYValue)
-		print(bestXFrame,',',bestYFrame)
+		print('The frames are probably a ',bestXFrame,' by ',bestYFrame, ' rectangle.')
 	
 
 
-func waitDoesGodotSERIOUSLYNotHaveANativeMeanOrSumFunctionForArraysWTF(myArray):
-	var arrayMean = 0
+#counts the number of transparent pixels on each edge, applies a 2x bonus for each 'perfect' edge,
+#and an additional 2x bonus for having all perfect edges and centers
+#all other things being equal, a grid that finds sprites surrounded on all 4 sides by a box of
+#transparency is probably the correct one.
+#but if we don't find anything like that, we go to the closest box
+func  weightTransparentCount(sumArray,maxValue,numFrames,midFrameIndex):
+	var currPixelStart=(midFrameIndex-1) * (sumArray.size()/numFrames) -1;
+	var weightedSumVal = 0.0;
+	var perfectLines=0.0;
 	
-	for arrayEntry in myArray:
-		arrayMean+=arrayEntry/(myArray.size())
+	#increase the score for transparent pixels on the edge
+
+	var addTestIndexes = [currPixelStart+1,currPixelStart + sumArray.size()/numFrames ];
+	var numAddTests=addTestIndexes.size() * 1.0;
+	for currTestIndex in addTestIndexes:
+		weightedSumVal=weightedSumVal + (1.0/numAddTests) * sumArray[currTestIndex];
+		#double points if you have a perfect edge with no opacity.
+		if(sumArray[currTestIndex] == maxValue):
+			weightedSumVal=weightedSumVal + (1.0/numAddTests) * sumArray[currTestIndex];
+			perfectLines=perfectLines+1;
 		
-	pass
-	return arrayMean
+	
+	#decrease the score for transparent pixels in the middle (centerline +-1/6 of the frame)
+	var subtractTestIndexes=[currPixelStart +  ceil(sumArray.size()/(numFrames*2.0)+1.0),currPixelStart +  floor(sumArray.size()/(numFrames*3) ),currPixelStart +  ceil(2.0*sumArray.size()/(numFrames*3.0) )];
+	
+	var numSubtractTests=subtractTestIndexes.size() * 1.0
+	for currTestIndex in subtractTestIndexes:
+		
+		weightedSumVal=weightedSumVal- (1.0/numSubtractTests) *sumArray[currTestIndex];
+		#double penalty if you have a center that has no opacity.
+		if(sumArray[currTestIndex] == maxValue):
+			weightedSumVal=weightedSumVal- (1.0/numSubtractTests) *sumArray[currTestIndex];
+			perfectLines=perfectLines-1;
+
+	#if we have a perfect run on all sides
+	#(ie: totally clear on each edge and not clear in the middle), 
+	# then double the weight on this run. 
+	if(perfectLines >= 2 ):   
+		weightedSumVal=weightedSumVal*2;
+
+	#normalize for number of frames
+	weightedSumVal=weightedSumVal/numFrames;
+	
+	return weightedSumVal 
+
