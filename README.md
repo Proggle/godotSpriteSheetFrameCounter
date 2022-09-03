@@ -5,4 +5,9 @@ Drag your sheet to the sprite's texture, run it, and it will print the x,y frame
 
 Did this because I was annoyed having to manually pick frames every time I added an animated sprite, and figured it could be done programmatically.  This isn't 100% perfect, especially on tiles with almost no transparency (like tiles_packed.png), but it'll give a reasonable best guess, which will at the bare minimum be better than assuming everything is 4x4.
 
-Demo spritesheets are CC0 from Kenney ( https://kenney.nl/assets)
+Spritesheets in the Kenney_Sprites folder are from Kenney, released under CC0
+ https://kenney.nl/assets 
+Ars_Notoria sprites by Balmer, released under CC0 
+ https://opengameart.org/content/hero-spritesheets-ars-notoria 
+Superpowers sprites by Pixel-Boy, released under CC0
+ https://github.com/sparklinlabs/superpowers-asset-packs 
